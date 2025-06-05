@@ -84,63 +84,69 @@ async function sortTabs() {
 
 		// If no container order is set, use the order in which they were created
 		if (prefs.containerOrder.length === 0) {
-			prefs.containerOrder = containers.map((c) => c.cookieStoreId);
+			containers.forEach((container, index) => {
+				containerOrderMap[container.cookieStoreId] = index;
+			});
 		}
 
 		// Separate pinned and unpinned tabs from the filtered list
 		const pinnedTabs = filteredTabs.filter((tab) => tab.pinned);
 		const unpinnedTabs = filteredTabs.filter((tab) => !tab.pinned);
 
-		const tabsWithContainers = unpinnedTabs.map((tab) => {
-			const container = containerMap[tab.cookieStoreId];
-			return {
-				...tab,
-				containerName: container ? container.name.toLowerCase() : null,
-				containerOrder: container
-					? containerOrderMap[container.cookieStoreId]
-					: Number.POSITIVE_INFINITY,
-			};
-		});
-		const sortedTabs = tabsWithContainers.sort((a, b) => {
-			// Tabs without containers should always be at the end
-			if (!a.containerName && b.containerName) return 1;
-			if (a.containerName && !b.containerName) return -1;
-			if (!a.containerName && !b.containerName) return a.index - b.index;
-
-			// Sort by container order
-			if (a.containerOrder !== b.containerOrder) {
-				return a.containerOrder - b.containerOrder;
+		// Group tabs by container
+		const containerGroups = {};
+		unpinnedTabs.forEach(tab => {
+			const cookieStoreId = tab.cookieStoreId || "firefox-default";
+			if (!containerGroups[cookieStoreId]) {
+				containerGroups[cookieStoreId] = [];
 			}
+			containerGroups[cookieStoreId].push(tab);
+		});
 
-			// If containers are the same, optionally sort tabs within the group
-			if (prefs.sortTabsInGroup) {
-				let aValue = "";
-				let bValue = "";
+		// Sort tabs within each container group if enabled
+		if (prefs.sortTabsInGroup) {
+			for (const cookieStoreId in containerGroups) {
+				containerGroups[cookieStoreId].sort((a, b) => {
+					let aValue = "";
+					let bValue = "";
 
-				if (prefs.tabSortCriteria === "title") {
-					aValue = assureString(a.title).toLowerCase();
-					bValue = assureString(b.title).toLowerCase();
-				} else if (prefs.tabSortCriteria === "url") {
-					aValue = assureString(a.url).toLowerCase();
-					bValue = assureString(b.url).toLowerCase();
-				} else if (prefs.tabSortCriteria === "domain") {
-					aValue = getDomain(a.url);
-					bValue = getDomain(b.url);
+					if (prefs.tabSortCriteria === "title") {
+						aValue = assureString(a.title).toLowerCase();
+						bValue = assureString(b.title).toLowerCase();
+					} else if (prefs.tabSortCriteria === "url") {
+						aValue = assureString(a.url).toLowerCase();
+						bValue = assureString(b.url).toLowerCase();
+					} else if (prefs.tabSortCriteria === "domain") {
+						aValue = getDomain(a.url);
+						bValue = getDomain(b.url);
+					}
+
+					return aValue.localeCompare(bValue);
+				});
+			}
+		}
+
+		// Sort container groups by the user-defined order
+		const sortedContainerIds = Object.keys(containerGroups).sort((a, b) => {
+			const orderA = containerOrderMap[a] !== undefined ? containerOrderMap[a] : Number.MAX_SAFE_INTEGER;
+			const orderB = containerOrderMap[b] !== undefined ? containerOrderMap[b] : Number.MAX_SAFE_INTEGER;
+			return orderA - orderB;
+		});
+
+		// Move tabs in the correct order
+		let currentIndex = pinnedTabs.length;
+		for (const cookieStoreId of sortedContainerIds) {
+			const containerTabs = containerGroups[cookieStoreId];
+			const tabIds = containerTabs.map(tab => tab.id);
+
+			if (tabIds.length > 0) {
+				try {
+					await browser.tabs.move(tabIds, { index: currentIndex });
+					currentIndex += tabIds.length;
+				} catch (e) {
+					console.error(`Error moving tabs for container ${cookieStoreId}:`, e);
 				}
-
-				return aValue.localeCompare(bValue);
 			}
-
-			// If sorting within groups is disabled or criteria are equal, maintain original order
-			return a.index - b.index;
-		});
-
-		// Move unpinned tabs to start after pinned tabs
-		const tabIds = sortedTabs.map((tab) => tab.id);
-		try {
-			await browser.tabs.move(tabIds, { index: pinnedTabs.length });
-		} catch (e) {
-			console.error("Error moving tabs:", e);
 		}
 	} catch (error) {
 		console.error("Error sorting tabs in sortTabs():", error);
