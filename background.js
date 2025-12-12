@@ -14,9 +14,9 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 	}
 });
 
-browser.runtime.onMessage.addListener((message) => {
+browser.runtime.onMessage.addListener(async (message) => {
 	if (message.action === "sortTabs") {
-		sortTabs();
+		await sortTabs();
 	}
 });
 
@@ -56,9 +56,10 @@ async function sortTabs() {
 	try {
 		const tabs = await browser.tabs.query({ currentWindow: true });
 
-		// Exclude extension and special tabs
+		// Exclude extension and special tabs (with null check for tab.url)
 		const filteredTabs = tabs.filter(
 			(tab) =>
+				tab.url &&
 				!tab.url.startsWith("moz-extension://") &&
 				!tab.url.startsWith("about:"),
 		);
@@ -82,9 +83,16 @@ async function sortTabs() {
 			containerOrderMap[id] = index;
 		});
 
-		// If no container order is set, use the order in which they were created
+		// If no container order is set, use the order in which they were created and persist it
 		if (prefs.containerOrder.length === 0) {
-			prefs.containerOrder = containers.map((c) => c.cookieStoreId);
+			const defaultOrder = containers.map((c) => c.cookieStoreId);
+			prefs.containerOrder = defaultOrder;
+			// Persist the default order so it's consistent across sessions
+			await browser.storage.local.set({ containerOrder: defaultOrder });
+			// Update the order map with the new defaults
+			defaultOrder.forEach((id, index) => {
+				containerOrderMap[id] = index;
+			});
 		}
 
 		// Separate pinned and unpinned tabs from the filtered list
